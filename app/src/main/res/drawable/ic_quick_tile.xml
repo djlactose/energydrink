@@ -1,0 +1,29 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- Can Outline -->
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="4"
+        android:fillColor="@android:color/transparent"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M16,10 Q16,8 18,8 L30,8 Q32,8 32,10 L32,38 Q32,40 30,40 L18,40 Q16,40 16,38 Z" />
+
+    <!-- Top of Can -->
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="4"
+        android:fillColor="@android:color/transparent"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M18,10 L30,10" />
+
+    <!-- Lightning Bolt -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M24,15 L20,24 L26,24 L22,33 L28,24 L22,24 Z" />
+</vector>
