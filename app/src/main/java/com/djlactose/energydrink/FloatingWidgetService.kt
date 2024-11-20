@@ -114,6 +114,13 @@ class FloatingWidgetService : Service() {
                         initialY = params.y
                         initialTouchX = event.rawX
                         initialTouchY = event.rawY
+
+                        // Save position when pressed down
+                        preferences.edit().apply {
+                            putInt("floatIconX", initialX)
+                            putInt("floatIconY", initialY)
+                            apply()
+                        }
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
@@ -142,11 +149,6 @@ class FloatingWidgetService : Service() {
                             if (Rect.intersects(floatIconRect, closeAreaRect)) {
                                 stopSelf()
                             }
-                        }
-                        preferences.edit().apply {
-                            putInt("floatIconX", params.x)
-                            putInt("floatIconY", params.y)
-                            apply()
                         }
                         closeArea.visibility = View.GONE
                         return true
