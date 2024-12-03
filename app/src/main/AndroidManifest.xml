@@ -19,17 +19,24 @@
         <service
             android:name=".FloatingWidgetTileService"
             android:icon="@drawable/ic_quick_tile"
-        android:label="Energy Drink"
-        android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:label="Energy Drink"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
-        <intent-filter>
-            <action android:name="android.service.quicksettings.action.QS_TILE" />
-        </intent-filter>
-    </service>
+        <receiver android:name=".PowerButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SCREEN_OFF" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
-            android:exported="true"> <!-- Add this line -->
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
