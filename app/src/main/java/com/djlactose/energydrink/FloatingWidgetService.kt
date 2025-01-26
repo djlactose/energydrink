@@ -208,15 +208,15 @@ class FloatingWidgetService : Service() {
      * gradually slowing down due to friction until it stops.
      */
     private fun startFlingAnimation(vX: Float, vY: Float) {
-        var localVx = vX
-        var localVy = vY
+        var localVx = vX * 2f
+        var localVy = vY * 2f
 
         // Create a runnable that updates position at ~60 FPS
         val flingRunnable = object : Runnable {
             override fun run() {
                 // Simulate friction
-                localVx *= 0.92f
-                localVy *= 0.92f
+                localVx *= 0.98f
+                localVy *= 0.98f
 
                 // Update position
                 params.x += localVx.toInt()
