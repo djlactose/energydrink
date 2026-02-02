@@ -11,8 +11,8 @@ android {
         applicationId = "com.djlactose.energydrink"
         minSdk = 24
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.06"
+        versionCode = 8
+        versionName = "1.07"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -46,6 +46,7 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.navigation.fragment.ktx)
     implementation(libs.androidx.navigation.ui.ktx)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

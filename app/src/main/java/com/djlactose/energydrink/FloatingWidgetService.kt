@@ -1,5 +1,9 @@
 package com.djlactose.energydrink
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -7,16 +11,48 @@ import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.os.*
-import android.view.*
+import android.net.Uri
+import android.os.Build
+import android.os.IBinder
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.VelocityTracker
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
+import androidx.core.app.NotificationCompat
 import androidx.core.view.isVisible
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class FloatingWidgetService : Service() {
 
     companion object {
         var isServiceRunning = false
+        private const val NOTIFICATION_ID = 1
+        private const val CHANNEL_ID = "energy_drink_channel"
+
+        // Constants for widget behavior
+        private const val ICON_SIZE = 200
+        private const val CLOSE_AREA_WIDTH = 450
+        private const val CLOSE_AREA_HEIGHT = 150
+        private const val CLOSE_AREA_MARGIN_BOTTOM = 100
+        private const val CLOSE_AREA_HALF_WIDTH = 225
+        private const val FRICTION = 0.98f
+        private const val VELOCITY_THRESHOLD = 50f  // pixels per second
+        private const val VELOCITY_MULTIPLIER = 0.005f
+        private const val FRAME_DELAY_MS = 16L
+        private const val SNAP_DURATION_MS = 200L
     }
 
     private lateinit var windowManager: WindowManager
@@ -24,7 +60,6 @@ class FloatingWidgetService : Service() {
     private lateinit var floatIcon: ImageView
     private lateinit var closeArea: FrameLayout
     private lateinit var closeIcon: ImageView
-    private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var preferences: SharedPreferences
     private lateinit var params: WindowManager.LayoutParams
 
@@ -33,30 +68,27 @@ class FloatingWidgetService : Service() {
     private var middleAreaLeftBound: Int = 0
     private var middleAreaRightBound: Int = 0
 
-    // For fling/inertia
-    private var lastTouchTime = 0L
-    private var lastX = 0f
-    private var lastY = 0f
-    private var velocityX = 0f
-    private var velocityY = 0f
+    // VelocityTracker for smooth fling detection
+    private var velocityTracker: VelocityTracker? = null
 
-    // Handler for fling “animation”
-    private val flingHandler = Handler(Looper.getMainLooper())
+    // Coroutine scope for animations
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var flingJob: Job? = null
+    private var timeoutJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         isServiceRunning = true
 
+        // Create notification channel and start as foreground service
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, createNotification())
+
         preferences = getSharedPreferences("FloatingWidgetPrefs", Context.MODE_PRIVATE)
+
+        // Load saved position
         val savedX = preferences.getInt("floatIconX", 0)
         val savedY = preferences.getInt("floatIconY", 0)
-
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "EnergyDrink:WakeLock"
-        )
-        wakeLock.acquire()
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
@@ -64,17 +96,36 @@ class FloatingWidgetService : Service() {
         floatingWidget = LayoutInflater.from(this).inflate(R.layout.floating_close, null)
 
         floatIcon = ImageView(this).apply {
-            setImageResource(R.drawable.energy_drink_floating)
-            layoutParams = ViewGroup.LayoutParams(200, 200)
+            layoutParams = ViewGroup.LayoutParams(ICON_SIZE, ICON_SIZE)
         }
         floatingWidget.findViewById<FrameLayout>(R.id.float_icon_container).addView(floatIcon)
 
+        // Load settings from preferences
+        val appPrefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+
+        // Apply custom icon if set
+        val customIconUri = appPrefs.getString("custom_icon_uri", null)
+        if (customIconUri != null) {
+            try {
+                floatIcon.setImageURI(Uri.parse(customIconUri))
+            } catch (e: Exception) {
+                floatIcon.setImageResource(R.drawable.energy_drink_floating)
+            }
+        } else {
+            floatIcon.setImageResource(R.drawable.energy_drink_floating)
+        }
+
+        // Apply opacity
+        val opacity = appPrefs.getInt("widget_opacity", 100)
+        floatIcon.alpha = opacity / 100f
+
         // Window LayoutParams for the floating widget
+        // FLAG_KEEP_SCREEN_ON keeps the screen on while the widget is visible
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
@@ -102,14 +153,14 @@ class FloatingWidgetService : Service() {
         }
 
         val closeParams = WindowManager.LayoutParams(
-            450,
-            150,
+            CLOSE_AREA_WIDTH,
+            CLOSE_AREA_HEIGHT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = 100
+            y = CLOSE_AREA_MARGIN_BOTTOM
         }
 
         windowManager.addView(closeArea, closeParams)
@@ -127,28 +178,23 @@ class FloatingWidgetService : Service() {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         // Stop any ongoing fling when the user touches it again
-                        flingHandler.removeCallbacksAndMessages(null)
-                        velocityX = 0f
-                        velocityY = 0f
+                        flingJob?.cancel()
+
+                        // Initialize velocity tracker
+                        velocityTracker?.recycle()
+                        velocityTracker = VelocityTracker.obtain()
+                        velocityTracker?.addMovement(event)
 
                         initialX = params.x
                         initialY = params.y
                         initialTouchX = event.rawX
                         initialTouchY = event.rawY
 
-                        lastTouchTime = System.currentTimeMillis()
-                        lastX = event.rawX
-                        lastY = event.rawY
-
-                        // Save position when pressed down
-                        preferences.edit().apply {
-                            putInt("floatIconX", initialX)
-                            putInt("floatIconY", initialY)
-                            apply()
-                        }
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
+                        velocityTracker?.addMovement(event)
+
                         // Update the position of the icon
                         params.x = initialX + (event.rawX - initialTouchX).toInt()
                         params.y = initialY + (event.rawY - initialTouchY).toInt()
@@ -163,19 +209,17 @@ class FloatingWidgetService : Service() {
                             closeArea.visibility = View.GONE
                         }
 
-                        // Compute velocity in px/ms
-                        val currentTime = System.currentTimeMillis()
-                        val deltaTime = (currentTime - lastTouchTime).coerceAtLeast(1) // Avoid 0
-                        velocityX = (event.rawX - lastX) / deltaTime
-                        velocityY = (event.rawY - lastY) / deltaTime
-
-                        lastTouchTime = currentTime
-                        lastX = event.rawX
-                        lastY = event.rawY
-
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
+                        // Compute velocity
+                        velocityTracker?.addMovement(event)
+                        velocityTracker?.computeCurrentVelocity(1000) // pixels per second
+                        val vX = velocityTracker?.xVelocity ?: 0f
+                        val vY = velocityTracker?.yVelocity ?: 0f
+                        velocityTracker?.recycle()
+                        velocityTracker = null
+
                         // If the close area is visible and the icon intersects it, stop the service
                         if (closeArea.isVisible) {
                             val floatIconRect = Rect()
@@ -191,55 +235,121 @@ class FloatingWidgetService : Service() {
                         }
                         closeArea.visibility = View.GONE
 
-                        // Initiate a fling animation if the velocity is large enough
-                        startFlingAnimation(velocityX, velocityY)
+                        // If velocity is small, snap to edge immediately.
+                        // Otherwise, start fling (which will snap after completing).
+                        if (abs(vX) < VELOCITY_THRESHOLD && abs(vY) < VELOCITY_THRESHOLD) {
+                            snapToNearestEdge()
+                        } else {
+                            startFlingAnimation(vX, vY)
+                        }
 
+                        return true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        velocityTracker?.recycle()
+                        velocityTracker = null
                         return true
                     }
                 }
                 return false
             }
         })
+
+        // Start auto-timeout if enabled
+        startTimeoutIfEnabled(appPrefs)
     }
 
     /**
-     * Start a simple fling animation using the last known velocity.
+     * Start the auto-timeout countdown if enabled.
+     */
+    private fun startTimeoutIfEnabled(prefs: SharedPreferences) {
+        val timeoutMs = prefs.getLong("timeout_ms", 0)
+        if (timeoutMs > 0) {
+            timeoutJob = serviceScope.launch {
+                delay(timeoutMs)
+                stopSelf()
+            }
+        }
+    }
+
+    /**
+     * Start a fling animation using coroutines.
      * The icon continues moving after the user lifts their finger,
      * gradually slowing down due to friction until it stops.
      */
     private fun startFlingAnimation(vX: Float, vY: Float) {
-        var localVx = vX * 2f
-        var localVy = vY * 2f
+        flingJob?.cancel()
+        flingJob = serviceScope.launch {
+            var localVx = vX * VELOCITY_MULTIPLIER
+            var localVy = vY * VELOCITY_MULTIPLIER
 
-        // Create a runnable that updates position at ~60 FPS
-        val flingRunnable = object : Runnable {
-            override fun run() {
-                // Simulate friction
-                localVx *= 0.98f
-                localVy *= 0.98f
+            while (isActive && (abs(localVx) > 0.5f || abs(localVy) > 0.5f)) {
+                // Apply friction
+                localVx *= FRICTION
+                localVy *= FRICTION
 
                 // Update position
                 params.x += localVx.toInt()
                 params.y += localVy.toInt()
 
-                // Clamp or bounce off edges if desired, e.g.:
-                // clampXAndYToScreen() // or bounce if hitting edges
+                // Clamp to screen bounds
+                clampXAndYToScreen()
 
                 // Update the floating widget
                 windowManager.updateViewLayout(floatingWidget, params)
 
-                // Continue until velocity is small
-                if (kotlin.math.abs(localVx) > 0.5f || kotlin.math.abs(localVy) > 0.5f) {
-                    flingHandler.postDelayed(this, 16)
-                }
+                delay(FRAME_DELAY_MS)
             }
-        }
 
-        // Start the fling
-        flingHandler.post(flingRunnable)
+            // Snap to edge after fling completes
+            snapToNearestEdge()
+        }
     }
 
-    /** Optionally clamp X and Y so the icon stays on screen. */
+    /**
+     * Smoothly animate the widget to the nearest horizontal edge.
+     */
+    private fun snapToNearestEdge() {
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val widgetWidth = floatingWidget.width
+
+        // Determine target X: left edge (0) or right edge
+        val targetX = if (params.x < screenWidth / 2) 0 else screenWidth - widgetWidth
+
+        flingJob?.cancel()
+        flingJob = serviceScope.launch {
+            val startX = params.x
+            val startTime = System.currentTimeMillis()
+
+            while (isActive) {
+                val elapsed = System.currentTimeMillis() - startTime
+                val progress = (elapsed.toFloat() / SNAP_DURATION_MS).coerceAtMost(1f)
+
+                // Ease-out interpolation for smooth deceleration
+                val easeOut = 1f - (1f - progress) * (1f - progress)
+                params.x = (startX + (targetX - startX) * easeOut).toInt()
+
+                windowManager.updateViewLayout(floatingWidget, params)
+
+                if (progress >= 1f) break
+                delay(FRAME_DELAY_MS)
+            }
+
+            savePosition(params.x, params.y)
+        }
+    }
+
+    /** Save the floating icon's position to SharedPreferences. */
+    private fun savePosition(x: Int, y: Int) {
+        preferences.edit().apply {
+            putInt("floatIconX", x)
+            putInt("floatIconY", y)
+            apply()
+        }
+    }
+
+    /** Clamp X and Y so the icon stays on screen. */
     private fun clampXAndYToScreen() {
         val displayMetrics = resources.displayMetrics
         val maxX = displayMetrics.widthPixels - floatingWidget.width
@@ -258,8 +368,8 @@ class FloatingWidgetService : Service() {
     private fun updateDimensions() {
         val displayMetrics = resources.displayMetrics
         bottomAreaThresholdY = displayMetrics.heightPixels * 4 / 5
-        middleAreaLeftBound = (displayMetrics.widthPixels / 2) - 225
-        middleAreaRightBound = (displayMetrics.widthPixels / 2) + 225
+        middleAreaLeftBound = (displayMetrics.widthPixels / 2) - CLOSE_AREA_HALF_WIDTH
+        middleAreaRightBound = (displayMetrics.widthPixels / 2) + CLOSE_AREA_HALF_WIDTH
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -267,12 +377,53 @@ class FloatingWidgetService : Service() {
         updateDimensions()
     }
 
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Energy Drink Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps the screen on while the floating widget is active"
+                setShowBadge(false)
+            }
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createNotification(): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Energy Drink Active")
+            .setContentText("Screen will stay on")
+            .setSmallIcon(R.drawable.ic_quick_tile)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setSilent(true)
+            .build()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         isServiceRunning = false
-        if (this::wakeLock.isInitialized && wakeLock.isHeld) {
-            wakeLock.release()
-        }
+
+        // Cancel all coroutines
+        flingJob?.cancel()
+        timeoutJob?.cancel()
+        serviceScope.cancel()
+
+        // Clean up velocity tracker
+        velocityTracker?.recycle()
+        velocityTracker = null
+
+        stopForeground(STOP_FOREGROUND_REMOVE)
         windowManager.removeView(floatingWidget)
         windowManager.removeView(closeArea)
     }

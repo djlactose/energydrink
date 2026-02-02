@@ -1,8 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.djlactose.energydrink">
 
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -14,8 +17,13 @@
 
         <service
             android:name=".FloatingWidgetService"
+            android:foregroundServiceType="specialUse"
             android:permission="android.permission.SYSTEM_ALERT_WINDOW"
-            android:configChanges="orientation|screenSize"/>
+            android:configChanges="orientation|screenSize">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="screen_wake" />
+        </service>
         <service
             android:name=".FloatingWidgetTileService"
             android:icon="@drawable/ic_quick_tile"
