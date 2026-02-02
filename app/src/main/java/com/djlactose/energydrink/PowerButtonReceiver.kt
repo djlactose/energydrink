@@ -7,6 +7,11 @@ import android.content.SharedPreferences
 import android.util.Log
 
 class PowerButtonReceiver : BroadcastReceiver() {
+
+    companion object {
+        const val ACTION_FINISH_APP = "com.djlactose.energydrink.FINISH_APP"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         Log.d("PowerButtonReceiver", "Received broadcast: ${intent.action}")
 
@@ -21,8 +26,10 @@ class PowerButtonReceiver : BroadcastReceiver() {
                 val serviceIntent = Intent(context, FloatingWidgetService::class.java)
                 context.stopService(serviceIntent)
 
-                // Shutdown the app
-                android.os.Process.killProcess(android.os.Process.myPid())
+                // Send broadcast to finish activities gracefully
+                val finishIntent = Intent(ACTION_FINISH_APP)
+                finishIntent.setPackage(context.packageName)
+                context.sendBroadcast(finishIntent)
             } else {
                 Log.d("PowerButtonReceiver", "Shutdown is disabled. Doing nothing.")
             }
