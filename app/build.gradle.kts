@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.djlactose.energydrink"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.djlactose.energydrink"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 8
-        versionName = "1.07"
+        targetSdk = 35
+        versionCode = 10
+        versionName = "1.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

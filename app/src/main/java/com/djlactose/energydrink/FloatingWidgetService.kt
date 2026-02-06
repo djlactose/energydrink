@@ -48,9 +48,9 @@ class FloatingWidgetService : Service() {
         private const val CLOSE_AREA_HEIGHT = 150
         private const val CLOSE_AREA_MARGIN_BOTTOM = 100
         private const val CLOSE_AREA_HALF_WIDTH = 225
-        private const val FRICTION = 0.98f
+        private const val FRICTION = 0.985f  // Higher = longer glide
         private const val VELOCITY_THRESHOLD = 50f  // pixels per second
-        private const val VELOCITY_MULTIPLIER = 0.005f
+        private const val VELOCITY_MULTIPLIER = 0.018f  // ~1/60 to convert px/s to px/frame
         private const val FRAME_DELAY_MS = 16L
         private const val SNAP_DURATION_MS = 200L
     }
