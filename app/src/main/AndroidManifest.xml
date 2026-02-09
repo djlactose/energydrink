@@ -35,13 +35,6 @@
             </intent-filter>
         </service>
 
-        <receiver android:name=".PowerButtonReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.SCREEN_OFF" />
-            </intent-filter>
-        </receiver>
-
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -5,8 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.PixelFormat
@@ -14,6 +17,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.service.quicksettings.TileService
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -61,6 +65,7 @@ class FloatingWidgetService : Service() {
     private lateinit var closeArea: FrameLayout
     private lateinit var closeIcon: ImageView
     private lateinit var preferences: SharedPreferences
+    private lateinit var appPrefs: SharedPreferences
     private lateinit var params: WindowManager.LayoutParams
 
     // Screen area thresholds
@@ -70,6 +75,9 @@ class FloatingWidgetService : Service() {
 
     // VelocityTracker for smooth fling detection
     private var velocityTracker: VelocityTracker? = null
+
+    // Power button receiver to stop service when screen turns off
+    private var powerButtonReceiver: BroadcastReceiver? = null
 
     // Coroutine scope for animations
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -101,7 +109,7 @@ class FloatingWidgetService : Service() {
         floatingWidget.findViewById<FrameLayout>(R.id.float_icon_container).addView(floatIcon)
 
         // Load settings from preferences
-        val appPrefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        appPrefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
 
         // Apply custom icon if set
         val customIconUri = appPrefs.getString("custom_icon_uri", null)
@@ -134,6 +142,12 @@ class FloatingWidgetService : Service() {
         }
 
         windowManager.addView(floatingWidget, params)
+
+        // Clamp saved position to screen bounds after layout (dimensions are 0 before layout)
+        floatingWidget.post {
+            clampXAndYToScreen()
+            windowManager.updateViewLayout(floatingWidget, params)
+        }
 
         // Set up the "close" area at the bottom
         closeArea = FrameLayout(this).apply {
@@ -255,8 +269,44 @@ class FloatingWidgetService : Service() {
             }
         })
 
+        // Register/unregister power button receiver based on current setting
+        updatePowerButtonReceiver(appPrefs.getBoolean("shutdown_on_power", false))
+
+        // Listen for preference changes so toggling the setting takes effect immediately
+        appPrefs.registerOnSharedPreferenceChangeListener(prefListener)
+
         // Start auto-timeout if enabled
         startTimeoutIfEnabled(appPrefs)
+    }
+
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+        if (key == "shutdown_on_power") {
+            updatePowerButtonReceiver(prefs.getBoolean(key, false))
+        }
+    }
+
+    private fun updatePowerButtonReceiver(enabled: Boolean) {
+        // Unregister existing receiver if any
+        powerButtonReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
+        }
+        powerButtonReceiver = null
+
+        if (enabled) {
+            powerButtonReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (Intent.ACTION_SCREEN_OFF == intent.action) {
+                        stopSelf()
+                    }
+                }
+            }
+            val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(powerButtonReceiver, filter, RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(powerButtonReceiver, filter)
+            }
+        }
     }
 
     /**
@@ -375,6 +425,12 @@ class FloatingWidgetService : Service() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateDimensions()
+        // Reposition widget to stay on-screen after screen size change
+        floatingWidget.post {
+            clampXAndYToScreen()
+            windowManager.updateViewLayout(floatingWidget, params)
+            savePosition(params.x, params.y)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -413,6 +469,16 @@ class FloatingWidgetService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isServiceRunning = false
+
+        // Request Quick Settings tile to refresh its state
+        TileService.requestListeningState(this, ComponentName(this, FloatingWidgetTileService::class.java))
+
+        // Unregister preference listener and power button receiver
+        appPrefs.unregisterOnSharedPreferenceChangeListener(prefListener)
+        powerButtonReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
+        }
+        powerButtonReceiver = null
 
         // Cancel all coroutines
         flingJob?.cancel()

@@ -1,9 +1,7 @@
 package com.djlactose.energydrink
 
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,20 +20,10 @@ import com.djlactose.energydrink.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var powerButtonReceiver: PowerButtonReceiver? = null
 
     // Timeout options
     private val timeoutOptions = arrayOf("Off", "5 minutes", "15 minutes", "30 minutes", "1 hour", "2 hours")
     private val timeoutValues = longArrayOf(0, 5*60*1000, 15*60*1000, 30*60*1000, 60*60*1000, 120*60*1000)
-
-    // Receiver to handle graceful app shutdown
-    private val finishReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == PowerButtonReceiver.ACTION_FINISH_APP) {
-                finishAffinity()
-            }
-        }
-    }
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -70,23 +58,6 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         val preferences = getSharedPreferences("app_prefs", MODE_PRIVATE)
-
-        // Dynamically register PowerButtonReceiver
-        powerButtonReceiver = PowerButtonReceiver()
-        val screenOffFilter = IntentFilter(Intent.ACTION_SCREEN_OFF)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(powerButtonReceiver, screenOffFilter, RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(powerButtonReceiver, screenOffFilter)
-        }
-
-        // Register finish receiver for graceful shutdown
-        val finishFilter = IntentFilter(PowerButtonReceiver.ACTION_FINISH_APP)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(finishReceiver, finishFilter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(finishReceiver, finishFilter)
-        }
 
         // Request overlay permission if needed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
@@ -212,24 +183,5 @@ class MainActivity : AppCompatActivity() {
         }
         binding.startServiceButton.isEnabled = hasOverlayPermission
         binding.startServiceButton.alpha = if (hasOverlayPermission) 1.0f else 0.5f
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        // Unregister receivers to prevent memory leak
-        powerButtonReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (e: IllegalArgumentException) {
-                // Receiver was not registered
-            }
-        }
-        powerButtonReceiver = null
-
-        try {
-            unregisterReceiver(finishReceiver)
-        } catch (e: IllegalArgumentException) {
-            // Receiver was not registered
-        }
     }
 }
