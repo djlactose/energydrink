@@ -1,7 +1,23 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
+
+// Release signing credentials come from keystore.properties (local, git-ignored)
+// or, failing that, from environment variables (CI). When neither is present the
+// release build is simply left unsigned instead of failing.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun signingSetting(propertyName: String, envName: String): String? =
+    keystoreProperties.getProperty(propertyName)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(envName)?.takeIf { it.isNotBlank() }
 
 android {
     namespace = "com.djlactose.energydrink"
@@ -17,8 +33,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val store = signingSetting("storeFile", "KEYSTORE_FILE")
+            if (store != null) {
+                storeFile = file(store)
+                storePassword = signingSetting("storePassword", "KEYSTORE_PASSWORD")
+                keyAlias = signingSetting("keyAlias", "KEY_ALIAS")
+                keyPassword = signingSetting("keyPassword", "KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
