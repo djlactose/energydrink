@@ -38,6 +38,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Compute artifact suffix
+        id: meta
+        # Artifact names cannot contain "/", so flatten the branch name.
+        run: echo "slug=${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Run unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
@@ -47,7 +52,7 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: energydrink-debug-apk-${{ github.ref_name }}-${{ github.sha }}
+          name: energydrink-debug-apk-${{ steps.meta.outputs.slug }}
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -56,7 +61,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-report-${{ github.sha }}
+          name: unit-test-report-${{ steps.meta.outputs.slug }}
           path: app/build/reports/tests/
           if-no-files-found: ignore
           retention-days: 30
@@ -83,6 +88,11 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Compute artifact suffix
+        id: meta
+        # Artifact names cannot contain "/", so flatten the branch name.
+        run: echo "slug=${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       # Signing is optional: without the KEYSTORE_BASE64 secret the build still
       # runs and produces an unsigned bundle, which Play will not accept.
@@ -111,7 +121,7 @@ jobs:
       - name: Upload release AAB
         uses: actions/upload-artifact@v4
         with:
-          name: energydrink-release-aab-${{ github.ref_name }}-${{ github.sha }}
+          name: energydrink-release-aab-${{ steps.meta.outputs.slug }}
           path: app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
           retention-days: 30
