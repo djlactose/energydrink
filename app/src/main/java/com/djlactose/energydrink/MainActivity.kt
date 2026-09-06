@@ -1,7 +1,9 @@
 package com.djlactose.energydrink
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +26,15 @@ class MainActivity : AppCompatActivity() {
     // Timeout options
     private val timeoutOptions = arrayOf("Off", "5 minutes", "15 minutes", "30 minutes", "1 hour", "2 hours")
     private val timeoutValues = longArrayOf(0, 5*60*1000, 15*60*1000, 30*60*1000, 60*60*1000, 120*60*1000)
+
+    // Closes the app when the widget shuts down because the screen turned off
+    private val finishReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == FloatingWidgetService.ACTION_FINISH_APP) {
+                finishAffinity()
+            }
+        }
+    }
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -59,6 +70,13 @@ class MainActivity : AppCompatActivity() {
 
         val preferences = getSharedPreferences("app_prefs", MODE_PRIVATE)
 
+        val finishFilter = IntentFilter(FloatingWidgetService.ACTION_FINISH_APP)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(finishReceiver, finishFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(finishReceiver, finishFilter)
+        }
+
         // Request overlay permission if needed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
@@ -86,10 +104,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Power button toggle
-        val isShutdownOnPowerPress = preferences.getBoolean("shutdown_on_power", false)
+        val isShutdownOnPowerPress =
+            preferences.getBoolean(FloatingWidgetService.PREF_SHUTDOWN_ON_POWER, false)
         binding.powerButtonToggle.isChecked = isShutdownOnPowerPress
         binding.powerButtonToggle.setOnCheckedChangeListener { _, isChecked ->
-            preferences.edit().putBoolean("shutdown_on_power", isChecked).apply()
+            preferences.edit()
+                .putBoolean(FloatingWidgetService.PREF_SHUTDOWN_ON_POWER, isChecked)
+                .apply()
         }
 
         // Opacity slider
@@ -183,5 +204,14 @@ class MainActivity : AppCompatActivity() {
         }
         binding.startServiceButton.isEnabled = hasOverlayPermission
         binding.startServiceButton.alpha = if (hasOverlayPermission) 1.0f else 0.5f
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(finishReceiver)
+        } catch (_: IllegalArgumentException) {
+            // Receiver was not registered
+        }
     }
 }

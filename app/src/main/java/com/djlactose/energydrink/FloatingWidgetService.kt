@@ -14,10 +14,12 @@ import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.service.quicksettings.TileService
+import android.view.Display
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -45,6 +47,22 @@ class FloatingWidgetService : Service() {
         var isServiceRunning = false
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "energy_drink_channel"
+
+        /** Broadcast sent when the widget shuts down so any open activity finishes too. */
+        const val ACTION_FINISH_APP = "com.djlactose.energydrink.FINISH_APP"
+
+        /** Preference key for the "shutdown on power button press" setting. */
+        const val PREF_SHUTDOWN_ON_POWER = "shutdown_on_power"
+
+        /**
+         * Whether a display state reported by [DisplayManager] means the screen is off.
+         * Devices with an always-on display report DOZE rather than OFF when the user
+         * presses the power button, so both count as "screen off".
+         */
+        fun isScreenOff(displayState: Int): Boolean =
+            displayState == Display.STATE_OFF ||
+                displayState == Display.STATE_DOZE ||
+                displayState == Display.STATE_DOZE_SUSPEND
 
         // Constants for widget behavior
         private const val ICON_SIZE = 200
@@ -76,8 +94,10 @@ class FloatingWidgetService : Service() {
     // VelocityTracker for smooth fling detection
     private var velocityTracker: VelocityTracker? = null
 
-    // Power button receiver to stop service when screen turns off
-    private var powerButtonReceiver: BroadcastReceiver? = null
+    // Screen-off watchers used to stop the service when the user turns the screen off
+    private var screenOffReceiver: BroadcastReceiver? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var isShuttingDown = false
 
     // Coroutine scope for animations
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -269,44 +289,83 @@ class FloatingWidgetService : Service() {
             }
         })
 
-        // Register/unregister power button receiver based on current setting
-        updatePowerButtonReceiver(appPrefs.getBoolean("shutdown_on_power", false))
-
-        // Listen for preference changes so toggling the setting takes effect immediately
-        appPrefs.registerOnSharedPreferenceChangeListener(prefListener)
+        // Watch for the screen turning off for as long as the widget is up
+        registerScreenOffWatchers()
 
         // Start auto-timeout if enabled
         startTimeoutIfEnabled(appPrefs)
     }
 
-    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
-        if (key == "shutdown_on_power") {
-            updatePowerButtonReceiver(prefs.getBoolean(key, false))
-        }
-    }
-
-    private fun updatePowerButtonReceiver(enabled: Boolean) {
-        // Unregister existing receiver if any
-        powerButtonReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
-        }
-        powerButtonReceiver = null
-
-        if (enabled) {
-            powerButtonReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (Intent.ACTION_SCREEN_OFF == intent.action) {
-                        stopSelf()
-                    }
+    /**
+     * Start listening for the screen turning off.
+     *
+     * The watchers stay registered for the whole life of the service and the
+     * "shutdown on power button press" preference is read when the screen actually
+     * turns off. That way the setting is always honoured, even if it was toggled
+     * while the widget was already running.
+     */
+    private fun registerScreenOffWatchers() {
+        // ACTION_SCREEN_OFF is a protected broadcast, so it can only be received by a
+        // receiver registered at runtime - it is never delivered to a manifest receiver.
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (Intent.ACTION_SCREEN_OFF == intent.action) {
+                    onScreenOff()
                 }
             }
-            val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(powerButtonReceiver, filter, RECEIVER_EXPORTED)
-            } else {
-                registerReceiver(powerButtonReceiver, filter)
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        screenOffReceiver = receiver
+
+        // Fallback: some OEM builds delay or drop background broadcasts, and a device
+        // with an always-on display may never leave the interactive state. The display
+        // callback comes straight from DisplayManager, so it fires either way.
+        val displayManager = getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                val state = displayManager.getDisplay(displayId)?.state ?: return
+                if (isScreenOff(state)) {
+                    onScreenOff()
+                }
             }
         }
+        displayManager.registerDisplayListener(listener, null)
+        displayListener = listener
+    }
+
+    private fun unregisterScreenOffWatchers() {
+        screenOffReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
+        }
+        screenOffReceiver = null
+
+        displayListener?.let {
+            getSystemService(DisplayManager::class.java)?.unregisterDisplayListener(it)
+        }
+        displayListener = null
+    }
+
+    /**
+     * Shut the widget down when the screen turns off, if the user asked for that.
+     * Both watchers can report the same screen-off, so this is idempotent.
+     */
+    private fun onScreenOff() {
+        if (isShuttingDown) return
+        if (!appPrefs.getBoolean(PREF_SHUTDOWN_ON_POWER, false)) return
+        isShuttingDown = true
+
+        // Close the app UI as well - it may still be alive behind the widget when the
+        // service was started from the Quick Settings tile.
+        sendBroadcast(Intent(ACTION_FINISH_APP).setPackage(packageName))
+        stopSelf()
     }
 
     /**
@@ -473,12 +532,8 @@ class FloatingWidgetService : Service() {
         // Request Quick Settings tile to refresh its state
         TileService.requestListeningState(this, ComponentName(this, FloatingWidgetTileService::class.java))
 
-        // Unregister preference listener and power button receiver
-        appPrefs.unregisterOnSharedPreferenceChangeListener(prefListener)
-        powerButtonReceiver?.let {
-            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
-        }
-        powerButtonReceiver = null
+        // Stop listening for screen-off events
+        unregisterScreenOffWatchers()
 
         // Cancel all coroutines
         flingJob?.cancel()
