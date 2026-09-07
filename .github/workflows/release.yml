@@ -55,8 +55,12 @@ jobs:
           echo "slug=v1.$code-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "Building versionCode $code / versionName 1.$code"
 
+      # testDebugUnitTest, not testReleaseUnitTest: this project only generates
+      # the debug unit test task. It compiles the same main sources, and
+      # bundleRelease below compiles the release variant, so nothing goes
+      # unchecked.
       - name: Run unit tests
-        run: ./gradlew --no-daemon testReleaseUnitTest
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Decode upload keystore
         if: env.KEYSTORE_BASE64 != ''
