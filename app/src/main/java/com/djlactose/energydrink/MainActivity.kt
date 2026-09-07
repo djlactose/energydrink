@@ -173,10 +173,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Apps targeting Android 16 (API 36) are drawn edge to edge with no way to opt
-     * out, so the content has to be inset by hand or it sits under the status and
-     * navigation bars. Done for every supported version, not just API 36, so the
-     * layout looks the same everywhere.
+     * Since Android 16 (API 36) apps are drawn edge to edge with no way to opt out,
+     * so the content has to be inset by hand or it sits under the status and
+     * navigation bars. Done for every supported version, not just the ones that
+     * enforce it, so the layout looks the same everywhere.
      */
     private fun applyWindowInsets() {
         WindowCompat.setDecorFitsSystemWindows(window, false)

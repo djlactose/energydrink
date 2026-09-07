@@ -29,12 +29,12 @@ val appVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() }
 
 android {
     namespace = "com.djlactose.energydrink"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.djlactose.energydrink"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
 

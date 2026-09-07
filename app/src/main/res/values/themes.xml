@@ -3,9 +3,9 @@
         One theme for both light and dark. Material3 DayNight adapts on its own;
         the values-night variant only overrides the brand colours.
 
-        Apps targeting Android 16 (API 36) are always edge-to-edge and cannot opt
-        out, so the system bars are transparent and MainActivity insets the
-        content instead.
+        Since Android 16 (API 36) apps are always edge-to-edge and cannot opt out,
+        so the system bars are transparent and MainActivity insets the content
+        instead.
     -->
     <style name="Theme.EnergyDrink" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/purple_500</item>
