@@ -19,6 +19,14 @@ fun signingSetting(propertyName: String, envName: String): String? =
     keystoreProperties.getProperty(propertyName)?.takeIf { it.isNotBlank() }
         ?: System.getenv(envName)?.takeIf { it.isNotBlank() }
 
+// Release builds get their version from CI so every bundle uploaded to Play has
+// a higher versionCode than the last. The fallback keeps local builds on the
+// version committed here. versionName follows the existing "1.<code>" pairing.
+val fallbackVersionCode = 10
+val appVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: fallbackVersionCode
+val appVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() }
+    ?: "1.$appVersionCode"
+
 android {
     namespace = "com.djlactose.energydrink"
     compileSdk = 35
@@ -27,8 +35,8 @@ android {
         applicationId = "com.djlactose.energydrink"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.10"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

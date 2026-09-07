@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-aab:
+    name: Release AAB
+    runs-on: ubuntu-latest
+
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Full history: the version code is derived from the commit count.
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Commit count on main only ever grows, so each release outranks the last.
+      # The floor keeps it above versionCode 10, which is already on Play.
+      - name: Compute version
+        id: version
+        run: |
+          code=$(git rev-list --count HEAD)
+          floor=11
+          if [ "$code" -lt "$floor" ]; then
+            code=$floor
+          fi
+          echo "VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.$code" >> "$GITHUB_ENV"
+          echo "slug=v1.$code-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "Building versionCode $code / versionName 1.$code"
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon testReleaseUnitTest
+
+      - name: Decode upload keystore
+        if: env.KEYSTORE_BASE64 != ''
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          keystore="$RUNNER_TEMP/upload-keystore.jks"
+
+          # Tolerate the shapes a keystore secret usually arrives in: base64
+          # accepts newlines but rejects carriage returns, Windows
+          # "certutil -encode" wraps the data in PEM armor, and PowerShell
+          # Out-File prepends a UTF-8 BOM. base64 is pure ASCII, so dropping
+          # non-ASCII bytes removes a BOM without touching real payload.
+          cleaned=$(printf '%s' "$KEYSTORE_BASE64" |
+            grep -v -- '-----' | tr -d '[:space:]' | tr -d '\200-\377')
+
+          if ! printf '%s' "$cleaned" | base64 --decode > "$keystore" 2>/dev/null; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64 - see the diagnostics below for what is in it."
+            # Reports only the junk, never the key material: a correct value has
+            # no characters outside the base64 alphabet and a length divisible by 4.
+            echo "Diagnostics (no key material is printed):"
+            echo "  length after cleanup: ${#cleaned} (should be a multiple of 4, remainder $(( ${#cleaned} % 4 )))"
+            bad=$(printf '%s' "$cleaned" | tr -d 'A-Za-z0-9+/=' | fold -w1 | sort -u | tr -d '\n')
+            if [ -n "$bad" ]; then
+              echo "  characters outside the base64 alphabet: [$bad]"
+            else
+              echo "  no stray characters - the value is truncated or mis-padded."
+            fi
+            echo "  Regenerate into a FILE and set the secret from that file, rather than"
+            echo "  copying from a terminal - 'base64 -w0' prints no trailing newline, so a"
+            echo "  terminal selection readily clips characters or picks up the prompt:"
+            echo "    base64 -w0 your.keystore > keystore.b64"
+            echo "    gh secret set KEYSTORE_BASE64 --repo ${GITHUB_REPOSITORY} < keystore.b64"
+            exit 1
+          fi
+
+          # Fail here, naming the culprit, rather than letting Gradle fail later
+          # with a generic signing error. A truncated secret decodes cleanly into
+          # a corrupt keystore, so this check is what catches that case.
+          if ! keytool -list -keystore "$keystore" -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Could not open the decoded keystore. Check that KEYSTORE_BASE64 holds the keystore file itself and that KEYSTORE_PASSWORD is its store password."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$keystore" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::Alias '$KEY_ALIAS' is not in the keystore. Check the KEY_ALIAS secret; 'keytool -list -keystore <file>' shows the aliases it holds."
+            exit 1
+          fi
+
+          echo "KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Bundle release AAB
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon bundleRelease
+
+      # Verifies the signature rather than just looking for a signature block, and
+      # treats "secrets are set but the bundle came out unsigned" as a hard error -
+      # a misconfigured key must not pass silently.
+      - name: Verify the bundle is signed
+        run: |
+          aab=$(ls app/build/outputs/bundle/release/*.aab)
+          if jarsigner -verify "$aab" 2>&1 | grep -q 'jar verified'; then
+            echo "Signed: $aab"
+            jarsigner -verify -verbose:summary -certs "$aab" 2>&1 | grep -E '^ *X\.509' | head -2
+          elif [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::Signing secrets are set but $aab came out unsigned - check KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD."
+            exit 1
+          else
+            echo "::warning::$aab is UNSIGNED - set the KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD secrets to sign it."
+          fi
+
+      - name: Upload release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: energydrink-release-${{ steps.version.outputs.slug }}
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload unit test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report-${{ github.sha }}
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 30
