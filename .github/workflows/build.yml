@@ -109,11 +109,20 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew --no-daemon bundleRelease
 
-      - name: Check the bundle is signed
+      # Verifies the signature rather than just looking for a signature block, and
+      # treats "secrets are set but the bundle came out unsigned" as a hard error -
+      # a misconfigured key must not pass silently. Without any secrets configured
+      # the unsigned bundle is only a warning, so forks can still build.
+      - name: Verify the bundle is signed
         run: |
           aab=$(ls app/build/outputs/bundle/release/*.aab)
-          if unzip -l "$aab" | grep -qE 'META-INF/.*\.(RSA|DSA|EC)$'; then
+          if jarsigner -verify "$aab" 2>&1 | grep -q 'jar verified'; then
             echo "Signed: $aab"
+            jarsigner -verify -verbose:summary -certs "$aab" 2>&1 |
+              grep -E '^ *X\.509|smk? ' | head -5
+          elif [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::Signing secrets are set but $aab came out unsigned - check KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD."
+            exit 1
           else
             echo "::warning::$aab is UNSIGNED - set the KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD secrets to sign it."
           fi
