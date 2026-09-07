@@ -104,10 +104,36 @@ jobs:
         run: |
           keystore="$RUNNER_TEMP/upload-keystore.jks"
 
-          # Tolerate wrapped lines, CRLF and stray whitespace in the secret:
-          # base64 accepts newlines but rejects carriage returns.
-          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$keystore"; then
-            echo "::error::KEYSTORE_BASE64 is not valid base64. Regenerate it with: base64 -w0 upload-keystore.jks"
+          # Tolerate the shapes a keystore secret usually arrives in: base64
+          # accepts newlines but rejects carriage returns, and Windows
+          # "certutil -encode" wraps the data in PEM armor lines.
+          # base64 is pure ASCII, so dropping non-ASCII bytes removes a UTF-8 BOM
+          # (added by PowerShell Out-File) without touching real payload. Any
+          # corruption this lets through is caught by the keytool check below.
+          cleaned=$(printf '%s' "$KEYSTORE_BASE64" |
+            grep -v -- '-----' | tr -d '[:space:]' | tr -d '\200-\377')
+
+          if ! printf '%s' "$cleaned" | base64 --decode > "$keystore" 2>/dev/null; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64 - see the diagnostics below for what is in it."
+            # Reports only the junk, never the key material: a correct value has
+            # no characters outside the base64 alphabet and a length divisible by 4.
+            echo "Diagnostics (no key material is printed):"
+            echo "  length after cleanup: ${#cleaned} (should be a multiple of 4, remainder $(( ${#cleaned} % 4 )))"
+            bad=$(printf '%s' "$cleaned" | tr -d 'A-Za-z0-9+/=' | fold -w1 | sort -u | tr -d '\n')
+            if [ -n "$bad" ]; then
+              echo "  characters outside the base64 alphabet: [$bad]"
+            else
+              echo "  no stray characters - the value is likely truncated or mis-padded."
+            fi
+            echo "  Regenerate into a FILE and copy from there - 'base64 -w0' prints no"
+            echo "  trailing newline, so copying from a terminal easily picks up the shell"
+            echo "  prompt at the end of the line:"
+            echo "    Linux / Git Bash:   base64 -w0 your.jks > keystore.b64"
+            echo "    macOS:              base64 -i your.jks | tr -d '\n' > keystore.b64"
+            echo "    Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('your.jks')) | Set-Content -NoNewline keystore.b64"
+            echo "  Then check it round-trips before pasting keystore.b64 into the secret:"
+            echo "    base64 -d keystore.b64 > rt.jks && cmp rt.jks your.jks && echo OK"
+            echo "  Avoid 'certutil -encode', which adds PEM armor and CRLF."
             exit 1
           fi
 
