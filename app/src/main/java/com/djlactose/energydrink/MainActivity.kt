@@ -17,6 +17,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import com.djlactose.energydrink.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
@@ -67,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applyWindowInsets()
 
         val preferences = getSharedPreferences("app_prefs", MODE_PRIVATE)
 
@@ -165,6 +170,28 @@ class MainActivity : AppCompatActivity() {
 
         // Check battery optimization on first launch
         checkBatteryOptimization()
+    }
+
+    /**
+     * Apps targeting Android 16 (API 36) are drawn edge to edge with no way to opt
+     * out, so the content has to be inset by hand or it sits under the status and
+     * navigation bars. Done for every supported version, not just API 36, so the
+     * layout looks the same everywhere.
+     */
+    private fun applyWindowInsets() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.updatePadding(
+                left = bars.left,
+                top = bars.top,
+                right = bars.right,
+                bottom = bars.bottom
+            )
+            WindowInsetsCompat.CONSUMED
+        }
     }
 
     private fun checkBatteryOptimization() {
