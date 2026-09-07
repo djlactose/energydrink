@@ -98,9 +98,31 @@ jobs:
       # runs and produces an unsigned bundle, which Play will not accept.
       - name: Decode upload keystore
         if: env.KEYSTORE_BASE64 != ''
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload-keystore.jks"
-          echo "KEYSTORE_FILE=$RUNNER_TEMP/upload-keystore.jks" >> "$GITHUB_ENV"
+          keystore="$RUNNER_TEMP/upload-keystore.jks"
+
+          # Tolerate wrapped lines, CRLF and stray whitespace in the secret:
+          # base64 accepts newlines but rejects carriage returns.
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$keystore"; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64. Regenerate it with: base64 -w0 upload-keystore.jks"
+            exit 1
+          fi
+
+          # Fail here, with a message that names the culprit, rather than letting
+          # Gradle fail later with a generic signing error.
+          if ! keytool -list -keystore "$keystore" -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Could not open the decoded keystore. Check that KEYSTORE_BASE64 holds the .jks file itself and that KEYSTORE_PASSWORD is its store password."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$keystore" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::Alias '$KEY_ALIAS' is not in the keystore. Check the KEY_ALIAS secret; 'keytool -list -keystore <file>' shows the aliases it holds."
+            exit 1
+          fi
+
+          echo "KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
 
       - name: Bundle release AAB
         env:
