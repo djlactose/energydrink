@@ -39,6 +39,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 class FloatingWidgetService : Service() {
@@ -53,6 +56,12 @@ class FloatingWidgetService : Service() {
 
         /** Preference key for the "shutdown on power button press" setting. */
         const val PREF_SHUTDOWN_ON_POWER = "shutdown_on_power"
+
+        /** Preference key holding the recent-activity log shown on the settings screen. */
+        const val PREF_EVENT_LOG = "event_log"
+
+        /** How many log lines to keep. */
+        private const val EVENT_LOG_LINES = 12
 
         /**
          * Whether a display state reported by [DisplayManager] means the screen is off.
@@ -291,6 +300,8 @@ class FloatingWidgetService : Service() {
 
         // Watch for the screen turning off for as long as the widget is up
         registerScreenOffWatchers()
+        val closeOnScreenOff = appPrefs.getBoolean(PREF_SHUTDOWN_ON_POWER, false)
+        logEvent("widget started - close on screen off is ${if (closeOnScreenOff) "ON" else "OFF"}")
 
         // Start auto-timeout if enabled
         startTimeoutIfEnabled(appPrefs)
@@ -310,7 +321,7 @@ class FloatingWidgetService : Service() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (Intent.ACTION_SCREEN_OFF == intent.action) {
-                    onScreenOff()
+                    onScreenOff("broadcast")
                 }
             }
         }
@@ -333,7 +344,7 @@ class FloatingWidgetService : Service() {
                 if (displayId != Display.DEFAULT_DISPLAY) return
                 val state = displayManager.getDisplay(displayId)?.state ?: return
                 if (isScreenOff(state)) {
-                    onScreenOff()
+                    onScreenOff("display state $state")
                 }
             }
         }
@@ -357,15 +368,43 @@ class FloatingWidgetService : Service() {
      * Shut the widget down when the screen turns off, if the user asked for that.
      * Both watchers can report the same screen-off, so this is idempotent.
      */
-    private fun onScreenOff() {
-        if (isShuttingDown) return
-        if (!appPrefs.getBoolean(PREF_SHUTDOWN_ON_POWER, false)) return
+    private fun onScreenOff(source: String) {
+        if (isShuttingDown) {
+            logEvent("screen off ($source) - already stopping")
+            return
+        }
+        if (!appPrefs.getBoolean(PREF_SHUTDOWN_ON_POWER, false)) {
+            logEvent("screen off ($source) - setting is OFF, staying up")
+            return
+        }
         isShuttingDown = true
+        logEvent("screen off ($source) - stopping widget")
+
+        // Stop first. Anything after this is a best effort extra, and must not be able
+        // to leave isShuttingDown latched with the service still running - that would
+        // make every later screen-off a no-op.
+        stopSelf()
 
         // Close the app UI as well - it may still be alive behind the widget when the
         // service was started from the Quick Settings tile.
-        sendBroadcast(Intent(ACTION_FINISH_APP).setPackage(packageName))
-        stopSelf()
+        try {
+            sendBroadcast(Intent(ACTION_FINISH_APP).setPackage(packageName))
+        } catch (e: Exception) {
+            logEvent("could not signal the app to close: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Append a line to the short activity log shown on the settings screen. The
+     * screen-off path cannot be observed on a device without this, since by the time
+     * the user can look at the phone the moment has passed.
+     */
+    private fun logEvent(message: String) {
+        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        val existing = appPrefs.getString(PREF_EVENT_LOG, "").orEmpty()
+        val lines = (existing.split("\n").filter { it.isNotBlank() } + "$stamp  $message")
+            .takeLast(EVENT_LOG_LINES)
+        appPrefs.edit().putString(PREF_EVENT_LOG, lines.joinToString("\n")).apply()
     }
 
     /**
@@ -534,6 +573,7 @@ class FloatingWidgetService : Service() {
 
         // Stop listening for screen-off events
         unregisterScreenOffWatchers()
+        logEvent("widget stopped")
 
         // Cancel all coroutines
         flingJob?.cancel()

@@ -162,6 +162,11 @@ class MainActivity : AppCompatActivity() {
             iconPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
 
+        binding.clearEventLogButton.setOnClickListener {
+            preferences.edit().remove(FloatingWidgetService.PREF_EVENT_LOG).apply()
+            showEventLog()
+        }
+
         binding.clearIconButton.setOnClickListener {
             preferences.edit().remove("custom_icon_uri").apply()
             binding.customIconPreview.setImageResource(R.drawable.energy_drink_floating)
@@ -221,6 +226,18 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateStartButtonState()
+        showEventLog()
+    }
+
+    /** Show what the widget service recorded, so screen-off behaviour is visible here. */
+    private fun showEventLog() {
+        val log = getSharedPreferences("app_prefs", MODE_PRIVATE)
+            .getString(FloatingWidgetService.PREF_EVENT_LOG, null)
+        binding.eventLogText.text = if (log.isNullOrBlank()) {
+            "Nothing recorded yet. Start the widget, turn the screen off, then come back here."
+        } else {
+            log
+        }
     }
 
     private fun updateStartButtonState() {

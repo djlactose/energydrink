@@ -140,6 +140,32 @@
 
         </LinearLayout>
 
+        <!-- Recent activity: shows whether screen-off is being detected -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Recent Activity"
+            android:textColor="?attr/colorOnSurface"
+            android:textStyle="bold"
+            android:layout_marginTop="24dp" />
+
+        <TextView
+            android:id="@+id/eventLogText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurface"
+            android:textIsSelectable="true" />
+
+        <Button
+            android:id="@+id/clearEventLogButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Clear Log"
+            android:layout_marginTop="8dp" />
+
     </LinearLayout>
 
 </ScrollView>
