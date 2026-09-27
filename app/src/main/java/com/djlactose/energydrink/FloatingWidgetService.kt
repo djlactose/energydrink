@@ -107,6 +107,7 @@ class FloatingWidgetService : Service() {
     private var screenOffReceiver: BroadcastReceiver? = null
     private var displayListener: DisplayManager.DisplayListener? = null
     private var isShuttingDown = false
+    private var overlayRemoved = false
 
     // Coroutine scope for animations
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -400,6 +401,7 @@ class FloatingWidgetService : Service() {
      * the user can look at the phone the moment has passed.
      */
     private fun logEvent(message: String) {
+        if (!::appPrefs.isInitialized) return
         val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         val existing = appPrefs.getString(PREF_EVENT_LOG, "").orEmpty()
         val lines = (existing.split("\n").filter { it.isNotBlank() } + "$stamp  $message")
@@ -568,25 +570,50 @@ class FloatingWidgetService : Service() {
         super.onDestroy()
         isServiceRunning = false
 
-        // Request Quick Settings tile to refresh its state
-        TileService.requestListeningState(this, ComponentName(this, FloatingWidgetTileService::class.java))
+        // Take the overlay down FIRST. The windows belong to the process, not to this
+        // service, so if anything below throws before they are removed the widget is
+        // left on screen with the service already gone - and nothing can remove it.
+        removeOverlayViews()
 
-        // Stop listening for screen-off events
-        unregisterScreenOffWatchers()
+        quietly("stop listening for screen off") { unregisterScreenOffWatchers() }
+        quietly("cancel animations") {
+            flingJob?.cancel()
+            timeoutJob?.cancel()
+            serviceScope.cancel()
+        }
+        quietly("release velocity tracker") {
+            velocityTracker?.recycle()
+            velocityTracker = null
+        }
+        quietly("stop foreground") { stopForeground(STOP_FOREGROUND_REMOVE) }
+        quietly("refresh quick settings tile") {
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, FloatingWidgetTileService::class.java)
+            )
+        }
+
         logEvent("widget stopped")
+    }
 
-        // Cancel all coroutines
-        flingJob?.cancel()
-        timeoutJob?.cancel()
-        serviceScope.cancel()
+    /** Remove the overlay windows. Safe to call more than once. */
+    private fun removeOverlayViews() {
+        if (overlayRemoved) return
+        overlayRemoved = true
+        quietly("remove widget view") { windowManager.removeView(floatingWidget) }
+        quietly("remove close area") { windowManager.removeView(closeArea) }
+    }
 
-        // Clean up velocity tracker
-        velocityTracker?.recycle()
-        velocityTracker = null
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        windowManager.removeView(floatingWidget)
-        windowManager.removeView(closeArea)
+    /**
+     * Run a teardown step, recording rather than propagating a failure. One step
+     * throwing must never stop the rest of the teardown from running.
+     */
+    private fun quietly(label: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            logEvent("$label failed: ${e.javaClass.simpleName}")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
