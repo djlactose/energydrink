@@ -34,8 +34,15 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # packages must be set explicitly: this action's v3 default is
+      # "tools platform-tools", and Google has removed the legacy "tools"
+      # package from the SDK repository, so the default now fails the build
+      # with "Failed to find package 'tools'". Upstream main has already
+      # changed its default to platform-tools alone.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
