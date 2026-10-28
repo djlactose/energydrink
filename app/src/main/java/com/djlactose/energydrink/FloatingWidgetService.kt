@@ -317,16 +317,26 @@ class FloatingWidgetService : Service() {
      * while the widget was already running.
      */
     private fun registerScreenOffWatchers() {
-        // ACTION_SCREEN_OFF is a protected broadcast, so it can only be received by a
-        // receiver registered at runtime - it is never delivered to a manifest receiver.
+        // These are protected broadcasts, so they can only be received by a receiver
+        // registered at runtime - they are never delivered to a manifest receiver.
+        //
+        // DREAMING_STARTED matters as much as SCREEN_OFF here. On a charger the device
+        // starts a dream (the screensaver / photo frame) instead of turning the display
+        // off: the screen stays lit rendering the dream, so SCREEN_OFF is never sent and
+        // the display never leaves STATE_ON. Watching only for the screen going off
+        // means the widget survives exactly the case the user is trying to end.
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (Intent.ACTION_SCREEN_OFF == intent.action) {
-                    onScreenOff("broadcast")
+                when (intent.action) {
+                    Intent.ACTION_SCREEN_OFF -> onScreenOff("screen off")
+                    Intent.ACTION_DREAMING_STARTED -> onScreenOff("screensaver started")
                 }
             }
         }
-        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_DREAMING_STARTED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, RECEIVER_EXPORTED)
         } else {
